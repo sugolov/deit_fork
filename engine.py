@@ -15,11 +15,13 @@ from timm.utils import accuracy, ModelEma
 from losses import DistillationLoss
 import utils
 
+import wandb
 
+# NOTE: added new accelerator arg
 def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, loss_scaler, max_norm: float = 0,
-                    model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None,
+                    device: torch.device, epoch: int, loss_scaler, accelerator: Accelerator = None, 
+                    max_norm: float = 0, model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None,
                     set_training_mode=True, args = None):
     model.train(set_training_mode)
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -64,8 +66,13 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
 
         # this attribute is added by timm on one optimizer (adahessian)
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
-        loss_scaler(loss, optimizer, clip_grad=max_norm,
+
+        # NOTE: added this logic
+        if accelerator is None:
+            loss_scaler(loss, optimizer, clip_grad=max_norm, 
                     parameters=model.parameters(), create_graph=is_second_order)
+        else:
+            accelerator.backward(loss)
 
         torch.cuda.synchronize()
         if model_ema is not None:
@@ -73,6 +80,13 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
 
         metric_logger.update(loss=loss_value)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+
+        log_dict = {
+            "lr": optimizer.param_groups[0]["lr"],
+            "loss": loss_value
+        }
+
+        wandb.log(log_dict) if args.wandb else None
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)

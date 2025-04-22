@@ -58,6 +58,19 @@ class DistilledVisionTransformer(VisionTransformer):
             # during inference, return the average of both classifier predictions
             return (x + x_dist) / 2
 
+@register_model
+def deit_test(pretrained=False, **kwargs):
+    model = VisionTransformer(
+        patch_size=2, embed_dim=10, depth=1, num_heads=1, mlp_ratio=1, qkv_bias=True,
+        norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
+    model.default_cfg = _cfg()
+    if pretrained:
+        checkpoint = torch.hub.load_state_dict_from_url(
+            url="https://dl.fbaipublicfiles.com/deit/deit_tiny_patch16_224-a1311bcf.pth",
+            map_location="cpu", check_hash=True
+        )
+        model.load_state_dict(checkpoint["model"])
+    return model
 
 @register_model
 def deit_tiny_patch16_224(pretrained=False, **kwargs):
