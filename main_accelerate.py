@@ -435,9 +435,7 @@ def main(args):
     if args.accelerate:
         accelerator = Accelerator()
         # wrap in hf accelerate
-        model, optimizer, data_loader_train, lr_scheduler = accelerator.prepare(
-            model, optimizer, data_loader_train, lr_scheduler
-        )
+        model, optimizer, data_loader_train, lr_scheduler = accelerator.prepare(model, optimizer, data_loader_train, lr_scheduler)
     else:
         accelerator = None
 
