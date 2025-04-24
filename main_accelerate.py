@@ -2,14 +2,10 @@
 # All rights reserved.
 import argparse
 import datetime
-import os
-
 import numpy as np
 import time
 import torch
 import torch.backends.cudnn as cudnn
-import torch.distributed as dist
-
 import json
 
 from pathlib import Path
@@ -33,7 +29,6 @@ from augment import new_data_aug_generator
 
 import models
 import models_v2
-import models_vector
 
 import utils
 # import wandb
@@ -228,12 +223,7 @@ def main(args):
     if args.distillation_type != 'none' and args.finetune and not args.eval:
         raise NotImplementedError("Finetuning with distillation not yet supported")
 
-    # NOTE: added
-    local_rank = setup_device()
-    device = torch.device(f'cuda:{local_rank}')
-
-    # NOTE: previously had
-    # device = torch.device(args.device)
+    device = torch.device(args.device)
 
     # fix the seed for reproducibility
     seed = args.seed + utils.get_rank()
@@ -297,8 +287,6 @@ def main(args):
             label_smoothing=args.smoothing, num_classes=args.nb_classes)
 
     print(f"Creating model: {args.model}")
-    
-    #model = create_model(args.model, pretrained=False)
     model = create_model(
         args.model,
         pretrained=False,
@@ -471,10 +459,10 @@ def main(args):
 
         train_stats, wandb_train = train_one_epoch(
             model, criterion, data_loader_train,
-            optimizer, device, epoch, loss_scaler, 
-            accelerator,
+            optimizer, device, epoch, loss_scaler,
             args.clip_grad, model_ema, mixup_fn,
             set_training_mode=args.train_mode,  # keep in eval mode for deit finetuning / train mode for training and deit III finetuning
+            accelerator=accelerator,
             args = args,
         )
         # NOTE: added

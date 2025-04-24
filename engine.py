@@ -10,15 +10,13 @@ from typing import Iterable, Optional
 
 import torch
 
-from accelerate import Accelerator
-
 from timm.data import Mixup
 from timm.utils import accuracy, ModelEma
 
 from losses import DistillationLoss
 import utils
 
-# import wandb
+import wandb
 
 # NOTE: added new accelerator arg
 def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
