@@ -36,7 +36,7 @@ import models_v2
 import models_vector
 
 import utils
-# import wandb
+import wandb
 
 os.environ["OMP_NUM_THREADS"] = "4" 
 
@@ -210,16 +210,12 @@ def get_args_parser():
 
     parser.add_argument('--no-top-k', action='store_true', default=False, help='Store accuracy across entire batch')
     parser.add_argument('--wandb', action='store_true', default=False, help='Train with wandb logging')
+    parser.add_argument('--tag', default=None, type=str)
 
     return parser
 
 
 def main(args):
-
-    # NOTE: added, fix initialization to make consistent
-    if args.wandb:
-        wandb.init({})
-        wandb_log = {}
 
     utils.init_distributed_mode(args)
 
@@ -231,6 +227,14 @@ def main(args):
     # NOTE: added
     local_rank = setup_device()
     device = torch.device(f'cuda:{local_rank}')
+
+    if args.wandb and utils.is_main_process():
+        wandb.init(
+            project="vit-scaling", 
+            entity="hmeng-university-of-toronto",            
+            name="_".join([args.model, args.data_set]),
+            group=args.tag
+        )
 
     # NOTE: previously had
     # device = torch.device(args.device)
@@ -469,7 +473,7 @@ def main(args):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
 
-        train_stats, wandb_train = train_one_epoch(
+        train_stats = train_one_epoch(
             model, criterion, data_loader_train,
             optimizer, device, epoch, loss_scaler, 
             accelerator,
@@ -477,8 +481,13 @@ def main(args):
             set_training_mode=args.train_mode,  # keep in eval mode for deit finetuning / train mode for training and deit III finetuning
             args = args,
         )
-        # NOTE: added
-        wandb_log.update(wandb_train) if args.wandb else None
+
+        # NOTE: added wandb logging
+        # train_stats_wandb = {
+        #    "lr":         train_stats["lr"], 
+        #    "train_loss": train_stats["loss"], 
+        #    "train_acc":  train_stats["acc"]
+        #} 
 
         lr_scheduler.step(epoch)
         if args.output_dir:
@@ -501,10 +510,10 @@ def main(args):
                     'args': args,
                 }, checkpoint_path)
 
-        test_stats, wandb_test = evaluate(data_loader_val, model, device)
+        test_stats = evaluate(data_loader_val, model, device)
         print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
         # NOTE: added
-        wandb_log.update(wandb_test) if args.wandb else None 
+        # wandb_log.update(wandb_test) if args.wandb else None 
 
         if max_accuracy < test_stats["acc1"]:
             max_accuracy = test_stats["acc1"]
@@ -527,8 +536,9 @@ def main(args):
                      **{f'test_{k}': v for k, v in test_stats.items()},
                      'epoch': epoch,
                      'n_parameters': n_parameters}
-        
-        #print(wandb_log)
+
+        if args.wandb and utils.is_main_process():
+            wandb.log(log_stats)
 
         if args.output_dir and utils.is_main_process():
             with (output_dir / "log.txt").open("a") as f:
@@ -537,6 +547,9 @@ def main(args):
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
+
+    if args.wandb and utils.is_main_process():
+        wandb.finish()
 
 
 if __name__ == '__main__':

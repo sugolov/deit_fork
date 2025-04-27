@@ -29,7 +29,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
     model.train(set_training_mode)
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    metric_logger.add_meter('train_acc', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('acc', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
 
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
@@ -38,10 +38,10 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
         criterion = torch.nn.BCEWithLogitsLoss()
 
     # NOTE: simpler setup for hf logging
-    running_loss = 0.0
-    train_cor = 0
-    train_all = 0
-    epoch_start_time = time.time()
+    # running_loss = 0.0
+    # train_cor = 0
+    # train_all = 0
+    # epoch_start_time = time.time()
     
     #TODO: change this to tdqm + wandb
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
@@ -69,6 +69,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                 loss = loss + 0.25 * criterion(outputs[1], outputs[0].detach().sigmoid()) 
 
         loss_value = loss.item()
+        correct = (outputs == targets).sum().item()
 
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
@@ -90,30 +91,34 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
         if model_ema is not None:
             model_ema.update(model)
 
+        batch_size = samples.shape[0]
         metric_logger.update(loss=loss_value)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
+        metric_logger.meters['acc'].update(correct / batch_size, n=batch_size)
+
 
         # NOTE: added for wandb tracking
-        running_loss += loss_value
-        train_cor += (outputs.argmax(1) == targets.argmax(1)).sum().cpu().numpy()
-        train_all += len(outputs)
+        #running_loss += loss_value
+        #train_cor += (outputs.argmax(1) == targets.argmax(1)).sum().cpu().numpy()
+        #train_all += len(outputs)
 
-    avg_train_accuracy = train_cor / train_all * 100
-    avg_train_loss = running_loss / len(data_loader)
+    #avg_train_accuracy = train_cor / train_all * 100
+    #avg_train_loss = running_loss / len(data_loader)
 
-    wandb_log = {
-            "train_loss": avg_train_loss, 
-            "train_acc": avg_train_accuracy,
-            "lr": optimizer.param_groups[0]['lr'],
-            "epoch_time": time.time() - epoch_start_time
-        }
-    print(wandb_log)
+    #wandb_log = {
+    #        "train_loss": avg_train_loss, 
+    #        "train_acc": avg_train_accuracy,
+    #        "lr": optimizer.param_groups[0]['lr'],
+    #        "epoch_time": time.time() - epoch_start_time
+    #    }
+    #print(wandb_log)
     
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, wandb_log
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+
 
 
 @torch.no_grad()
@@ -125,11 +130,47 @@ def evaluate(data_loader, model, device):
 
     # switch to evaluation mode
     model.eval()
+
+    for images, target in metric_logger.log_every(data_loader, 10, header):
+        images = images.to(device, non_blocking=True)
+        target = target.to(device, non_blocking=True)
+
+        # compute output
+        with torch.cuda.amp.autocast():
+            output = model(images)
+            loss = criterion(output, target)
+
+        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        #print(output.shape)
+        #print(target.shape)
+        correct = (output.argmax(1) == target).sum().item()
+
+        batch_size = images.shape[0]
+        metric_logger.update(loss=loss.item())
+        metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
+        metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
+        metric_logger.meters['acc'].update(correct / batch_size, n=batch_size)
+    # gather the stats from all processes
+    metric_logger.synchronize_between_processes()
+    print('* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}'
+          .format(top1=metric_logger.acc1, top5=metric_logger.acc5, losses=metric_logger.loss))
+
+    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+"""
+@torch.no_grad()
+def evaluate(data_loader, model, device):
+    criterion = torch.nn.CrossEntropyLoss()
+
+    metric_logger = utils.MetricLogger(delimiter="  ")
+    header = 'Test:'
+
+    # switch to evaluation mode
+    model.eval()
     
     # NOTE: wandb logging
-    correct = 0
-    total = 0
-    test_loss = 0.0
+    #correct = 0
+    #total = 0
+    #test_loss = 0.0
 
     for images, target in metric_logger.log_every(data_loader, 10, header):
         images = images.to(device, non_blocking=True)
@@ -152,7 +193,7 @@ def evaluate(data_loader, model, device):
         metric_logger.update(loss=loss.item())
         metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
         metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
-        metric_logger.meters['acc'].update(correct / batch_size, n=batch_size)
+        #metric_logger.meters['acc'].update(correct / batch_size, n=batch_size)
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -161,12 +202,13 @@ def evaluate(data_loader, model, device):
     #print("Total test acc {acc.global_avg:.3f}".format(acc=metric_logger.acc))
 
     # wandb_accuracy
-    accuracy = 100 * correct / total
-    avg_test_loss = test_loss / len(data_loader)
+    #accuracy = 100 * correct / total
+    #avg_test_loss = test_loss / len(data_loader)
 
-    wandb_log = {
-        "test_loss": test_loss, 
-        "test_acc": accuracy, 
-    }
+    #wandb_log = {
+    #    "test_loss": test_loss, 
+    #    "test_acc": accuracy, 
+    #}
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}, wandb_log
+"""
