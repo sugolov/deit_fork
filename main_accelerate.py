@@ -210,7 +210,7 @@ def get_args_parser():
 
     parser.add_argument('--no-top-k', action='store_true', default=False, help='Store accuracy across entire batch')
     parser.add_argument('--wandb', action='store_true', default=False, help='Train with wandb logging')
-    parser.add_argument('--tag', default=None, type=str)
+    parser.add_argument('--tag', default="", type=str)
 
     return parser
 
@@ -232,7 +232,7 @@ def main(args):
         wandb.init(
             project="vit-scaling", 
             entity="hmeng-university-of-toronto",            
-            name="_".join([args.model, args.data_set]),
+            name="_".join([args.model, args.data_set, args.tag]),
             group=args.tag
         )
 
@@ -429,9 +429,6 @@ def main(args):
         teacher_model.to(device)
         teacher_model.eval()
 
-    # wrap the criterion in our custom DistillationLoss, which
-    # just dispatches to the original criterion if args.distillation_type is 'none'
-    # NOTE: delete if tihs causes problems
     criterion = DistillationLoss(
         criterion, teacher_model, args.distillation_type, args.distillation_alpha, args.distillation_tau
     )
@@ -482,13 +479,6 @@ def main(args):
             args = args,
         )
 
-        # NOTE: added wandb logging
-        # train_stats_wandb = {
-        #    "lr":         train_stats["lr"], 
-        #    "train_loss": train_stats["loss"], 
-        #    "train_acc":  train_stats["acc"]
-        #} 
-
         lr_scheduler.step(epoch)
         if args.output_dir:
             # NOTE: modified
@@ -512,8 +502,6 @@ def main(args):
 
         test_stats = evaluate(data_loader_val, model, device)
         print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
-        # NOTE: added
-        # wandb_log.update(wandb_test) if args.wandb else None 
 
         if max_accuracy < test_stats["acc1"]:
             max_accuracy = test_stats["acc1"]
