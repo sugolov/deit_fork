@@ -15,10 +15,13 @@ from accelerate import Accelerator
 from timm.data import Mixup
 from timm.utils import accuracy, ModelEma
 
+from timm.utils.clip_grad import dispatch_clip_grad
+
 from losses import DistillationLoss
 import utils
 
-# import wandb
+from gradient_smooth import compute_neighbor_averaged_gradients_accumulate as grad_smooth_acc
+from gradient_smooth import compute_neighbor_averaged_gradients as grad_smooth
 
 # NOTE: added new accelerator arg
 def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
@@ -30,6 +33,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('acc', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    metric_logger.add_meter('epoch_time', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
+
 
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
@@ -37,12 +42,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
     if args.cosub:
         criterion = torch.nn.BCEWithLogitsLoss()
 
-    # NOTE: simpler setup for hf logging
-    # running_loss = 0.0
-    # train_cor = 0
-    # train_all = 0
-    # epoch_start_time = time.time()
-    
+    start_time = time.time()
     #TODO: change this to tdqm + wandb
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         samples = samples.to(device, non_blocking=True)
@@ -81,11 +81,37 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
         is_second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
 
         # NOTE: added this logic to use hf accelerate
-        if accelerator is None:
+        if not args.grad_smooth:
             loss_scaler(loss, optimizer, clip_grad=max_norm, 
                     parameters=model.parameters(), create_graph=is_second_order)
         else:
-            accelerator.backward(loss)
+            clip_grad = max_norm
+            loss_scaler(loss, optimizer, clip_grad=clip_grad, 
+                    parameters=model.parameters(), create_graph=is_second_order, 
+                    need_update=False)
+
+            # NOTE: smoothing step
+            if args.smooth_direction == "right":
+                backwards = True
+            else:
+                backwards = False
+            
+            if args.smooth_accumulate:
+                grad_smooth_acc(model.module.blocks, args.smooth_k, device, 
+                    gamma=args.smooth_gamma, alpha=args.smooth_alpha, mult=args.smooth_mult, 
+                    backwards=backwards, direction=args.smooth_direction)
+            else:
+                grad_smooth(model.module.blocks, args.smooth_k, device, 
+                    gamma=args.smooth_gamma, alpha=args.smooth_alpha, mult=args.smooth_mult,
+                    direction=args.smooth_direction)
+
+            if clip_grad is not None:
+                assert model.parameters() is not None
+                loss_scaler._scaler.unscale_(optimizer)  # unscale the gradients of optimizer's assigned params in-place
+                dispatch_clip_grad(model.parameters(), clip_grad, mode='norm')
+
+            loss_scaler._scaler.step(optimizer)
+            loss_scaler._scaler.update()
 
         torch.cuda.synchronize()
         if model_ema is not None:
@@ -95,24 +121,8 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
         metric_logger.update(loss=loss_value)
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         metric_logger.meters['acc'].update(correct / batch_size, n=batch_size)
+        metric_logger.meters['epoch_time'].update(time.time() - start_time, n=1)
 
-
-        # NOTE: added for wandb tracking
-        #running_loss += loss_value
-        #train_cor += (outputs.argmax(1) == targets.argmax(1)).sum().cpu().numpy()
-        #train_all += len(outputs)
-
-    #avg_train_accuracy = train_cor / train_all * 100
-    #avg_train_loss = running_loss / len(data_loader)
-
-    #wandb_log = {
-    #        "train_loss": avg_train_loss, 
-    #        "train_acc": avg_train_accuracy,
-    #        "lr": optimizer.param_groups[0]['lr'],
-    #        "epoch_time": time.time() - epoch_start_time
-    #    }
-    #print(wandb_log)
-    
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()

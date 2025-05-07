@@ -3,6 +3,7 @@
 import argparse
 import datetime
 import os
+import random
 
 import numpy as np
 import time
@@ -39,6 +40,13 @@ import utils
 import wandb
 
 os.environ["OMP_NUM_THREADS"] = "4" 
+seed=0
+
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+if torch.cuda.is_available():       
+    torch.cuda.manual_seed_all(seed)
 
 def setup_device():
     local_rank = int(os.environ["LOCAL_RANK"])
@@ -207,11 +215,24 @@ def get_args_parser():
 
     # accelerate parameters
     parser.add_argument('--accelerate', action='store_true', default=False, help='Train with hf acceleration')
-
     parser.add_argument('--no-top-k', action='store_true', default=False, help='Store accuracy across entire batch')
     parser.add_argument('--wandb', action='store_true', default=False, help='Train with wandb logging')
+    parser.add_argument('--wandb-project', default="vit-scaling", type=str)
     parser.add_argument('--tag', default="", type=str)
 
+    # gradient smoothing
+    #TODO: add non-default
+    parser.add_argument('--grad-smooth', action='store_true', default=False, help='Train with gradient smoothing')
+    parser.add_argument('--smooth-gamma', type=float, default=0.5, help='weight on base layer, default 0.5')
+    parser.add_argument('--smooth-alpha', type=float, default=1.0, help='exponential decay')
+    parser.add_argument('--smooth-k', type=int, default=1, help='number of neighbours to smooth in')
+    parser.add_argument('--smooth-direction', type=str, default='both', choices=['both', 'left', 'right'], help='smoothing direction, default 0.5')
+    parser.add_argument('--smooth-mult', type=int, default=-1, choices=[-1, 1], help='negative or positive smoothing')
+    parser.add_argument('--smooth-accumulate', action='store_true', default=False)
+    #parser.add_argument('--smooth-backward',   action='store_true', default=False)
+
+   
+    
     return parser
 
 
@@ -230,10 +251,11 @@ def main(args):
 
     if args.wandb and utils.is_main_process():
         wandb.init(
-            project="vit-scaling", 
+            project=args.wandb_project, 
             entity="hmeng-university-of-toronto",            
             name="_".join([args.model, args.data_set, args.tag]),
-            group=args.tag
+            group=args.tag,
+            config=vars(args)
         )
 
     # NOTE: previously had
@@ -433,7 +455,11 @@ def main(args):
         criterion, teacher_model, args.distillation_type, args.distillation_alpha, args.distillation_tau
     )
 
+    # TODO: distinguish by smoothing params
     output_dir = Path(args.output_dir)
+    output_dir = output_dir / args.tag if args.tag is not None else output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     if args.resume:
         if args.resume.startswith('https'):
             checkpoint = torch.hub.load_state_dict_from_url(
@@ -500,7 +526,10 @@ def main(args):
                     'args': args,
                 }, checkpoint_path)
 
+        train_stats_eval = evaluate(data_loader_train, model, device)
         test_stats = evaluate(data_loader_val, model, device)
+
+        train_acc = train_stats_eval["acc1"]
         print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
 
         if max_accuracy < test_stats["acc1"]:
@@ -524,7 +553,8 @@ def main(args):
                      **{f'test_{k}': v for k, v in test_stats.items()},
                      'epoch': epoch,
                      'n_parameters': n_parameters}
-
+        log_stats["train_acc"] = train_acc
+    
         if args.wandb and utils.is_main_process():
             wandb.log(log_stats)
 
