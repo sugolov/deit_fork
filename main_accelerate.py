@@ -229,6 +229,7 @@ def get_args_parser():
     parser.add_argument('--smooth-direction', type=str, default='both', choices=['both', 'left', 'right'], help='smoothing direction, default 0.5')
     parser.add_argument('--smooth-mult', type=int, default=-1, choices=[-1, 1], help='negative or positive smoothing')
     parser.add_argument('--smooth-accumulate', action='store_true', default=False)
+    parser.add_argument('--smooth-same-nb-weight', action='store_true', default=False)
     #parser.add_argument('--smooth-backward',   action='store_true', default=False)
 
    
@@ -239,7 +240,6 @@ def get_args_parser():
 def main(args):
 
     utils.init_distributed_mode(args)
-
     print(args)
 
     if args.distillation_type != 'none' and args.finetune and not args.eval:

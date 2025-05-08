@@ -34,7 +34,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('acc', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
     metric_logger.add_meter('epoch_time', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-
+    print("train one epoch on", device)
 
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
@@ -86,20 +86,15 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                     parameters=model.parameters(), create_graph=is_second_order)
         else:
             clip_grad = max_norm
-            loss_scaler(loss, optimizer, clip_grad=clip_grad, 
-                    parameters=model.parameters(), create_graph=is_second_order, 
-                    need_update=False)
+            loss_scaler._scaler.scale(loss).backward(create_graph=is_second_order)
 
             # NOTE: smoothing step
-            if args.smooth_direction == "right":
-                backwards = True
-            else:
-                backwards = False
-            
+            backwards = (args.smooth_direction == "right")
+
             if args.smooth_accumulate:
                 grad_smooth_acc(model.module.blocks, args.smooth_k, device, 
                     gamma=args.smooth_gamma, alpha=args.smooth_alpha, mult=args.smooth_mult, 
-                    backwards=backwards, direction=args.smooth_direction)
+                    backwards=backwards, direction=args.smooth_direction, same_nb_weight=args.smooth_same_nb_weight)
             else:
                 grad_smooth(model.module.blocks, args.smooth_k, device, 
                     gamma=args.smooth_gamma, alpha=args.smooth_alpha, mult=args.smooth_mult,

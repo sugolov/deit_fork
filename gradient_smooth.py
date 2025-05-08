@@ -1,6 +1,9 @@
 import torch
 import numpy as np
 
+import os
+import utils
+
 class GradientSmoother:
 
     def __init__(self):
@@ -85,19 +88,25 @@ def compute_neighbor_averaged_gradients_accumulate(residual_blocks, k_neighbors,
             #print(weights)
             # weights = torch.tensor([1.0 / (abs(i - j) + 1) for j in neighbor_indices], device=device)
             # weights /= weights.sum()  # Normalize to ensure convex combination
-
+        
         for param_idx, param in enumerate(block.parameters()):
+            #print(f"[Rank {utils.get_rank()}] avg before {param.grad.mean().item()}")
             if param.grad is not None:
                 avg_grad = torch.zeros_like(param.grad)
 
                 for j, weight in zip(neighbor_indices, weights):
                     neighbor_params = list(residual_blocks[j].parameters())
+
                     if param_idx < len(neighbor_params):
                         neighbor_param = neighbor_params[param_idx]
+
                         if neighbor_param.grad is not None:
                             avg_grad += weight * neighbor_param.grad
-
+                
+                assert not torch.allclose(param.grad, avg_grad), "Error: param.grad and avg_grad are the same - smoothing not working"
                 param.grad.copy_(avg_grad)
+            #print(f"[Rank {utils.get_rank()}] avg after {param.grad.mean().item()}")
+            
 
 def compute_neighbor_averaged_gradients(residual_blocks, k_neighbors, device, gamma=0.5, alpha=1, mult=-1, equal_avg=False, direction='both', same_nb_weight=False):
     """Compute convex combination of gradients based on k neighboring blocks with decaying weights."""
