@@ -26,7 +26,7 @@ from gradient_smooth import compute_neighbor_averaged_gradients as grad_smooth
 # NOTE: added new accelerator arg
 def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
-                    device: torch.device, epoch: int, loss_scaler, accelerator: Accelerator = None, 
+                    device: torch.device, epoch: int, loss_scaler, accelerator: Accelerator = None, smoother = None,
                     max_norm: float = 0, model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None,
                     set_training_mode=True, args = None):
     model.train(set_training_mode)
@@ -91,14 +91,17 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
             # NOTE: smoothing step
             backwards = (args.smooth_direction == "right")
 
-            if args.smooth_accumulate:
-                grad_smooth_acc(model.module.blocks, args.smooth_k, device, 
-                    gamma=args.smooth_gamma, alpha=args.smooth_alpha, mult=args.smooth_mult, 
-                    backwards=backwards, direction=args.smooth_direction, same_nb_weight=args.smooth_same_nb_weight)
+            if smoother is not None:
+                smoother(model.module.blocks, device)
             else:
-                grad_smooth(model.module.blocks, args.smooth_k, device, 
-                    gamma=args.smooth_gamma, alpha=args.smooth_alpha, mult=args.smooth_mult,
-                    direction=args.smooth_direction)
+                if args.smooth_accumulate:
+                    grad_smooth_acc(model.module.blocks, args.smooth_k, device, 
+                        gamma=args.smooth_gamma, alpha=args.smooth_alpha, mult=args.smooth_mult, 
+                        backwards=backwards, direction=args.smooth_direction, same_nb_weight=args.smooth_same_nb_weight)
+                else:
+                    grad_smooth(model.module.blocks, args.smooth_k, device, 
+                        gamma=args.smooth_gamma, alpha=args.smooth_alpha, mult=args.smooth_mult,
+                        direction=args.smooth_direction)
 
             if clip_grad is not None:
                 assert model.parameters() is not None

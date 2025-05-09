@@ -32,6 +32,8 @@ from losses import DistillationLoss
 from samplers import RASampler
 from augment import new_data_aug_generator
 
+from gradient_smooth import get_smoother
+
 import models
 import models_v2
 import models_vector
@@ -223,6 +225,7 @@ def get_args_parser():
     # gradient smoothing
     #TODO: add non-default
     parser.add_argument('--grad-smooth', action='store_true', default=False, help='Train with gradient smoothing')
+    parser.add_argument('--grad-smooth-class-imp', action='store_true', default=False, help="use class implementation")
     parser.add_argument('--smooth-gamma', type=float, default=0.5, help='weight on base layer, default 0.5')
     parser.add_argument('--smooth-alpha', type=float, default=1.0, help='exponential decay')
     parser.add_argument('--smooth-k', type=int, default=1, help='number of neighbours to smooth in')
@@ -230,6 +233,8 @@ def get_args_parser():
     parser.add_argument('--smooth-mult', type=int, default=-1, choices=[-1, 1], help='negative or positive smoothing')
     parser.add_argument('--smooth-accumulate', action='store_true', default=False)
     parser.add_argument('--smooth-same-nb-weight', action='store_true', default=False)
+    parser.add_argument('--smooth-rescale-grad', action='store_true', default=False)
+    
     #parser.add_argument('--smooth-backward',   action='store_true', default=False)
 
    
@@ -405,6 +410,12 @@ def main(args):
             device='cpu' if args.model_ema_force_cpu else '',
             resume='')
 
+    # NOTE: GradientSmoother implemented
+    #================================================#
+    smoother = get_smoother(args) if args.grad_smooth_class_imp else None
+    #================================================#
+
+
     model_without_ddp = model
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
@@ -499,7 +510,7 @@ def main(args):
         train_stats = train_one_epoch(
             model, criterion, data_loader_train,
             optimizer, device, epoch, loss_scaler, 
-            accelerator,
+            accelerator, smoother,              # smoother positional arg
             args.clip_grad, model_ema, mixup_fn,
             set_training_mode=args.train_mode,  # keep in eval mode for deit finetuning / train mode for training and deit III finetuning
             args = args,
